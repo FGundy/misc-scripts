@@ -10,6 +10,12 @@ import sys
 from pathlib import Path
 from typing import List
 
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+
 
 def _is_under(path: Path, root: Path) -> bool:
     """Check if path is under root without string operations."""
@@ -38,35 +44,32 @@ def find_matching_dirs(root, patterns: List[str], report_every=1000, use_tqdm=Fa
     # compile regex once for speed - avoids repeated string operations
     regex = re.compile("|".join(re.escape(p) for p in patterns), re.IGNORECASE)
     
-    # setup progress reporting
+    # initialize variables
+    matches = []
+    count = 0
+    skip_list = [Path(p).resolve() for p in (skip_paths or [])]
     pbar = None
-    if use_tqdm:
-        try:
-            from tqdm import tqdm
-            pbar = tqdm(unit="dirs")
-            def progress(scanned, found):
-                pbar.set_postfix(scanned=f"{scanned:,}", found=found)
-                pbar.update(1)
-        except ImportError:
-            use_tqdm = False
+    root_path = Path(root).resolve()  # ensure root is a Path object
     
-    if not use_tqdm:
+    # setup progress reporting
+    if use_tqdm and HAS_TQDM:
+        pbar = tqdm(unit="dirs")
+        def progress(scanned, found):
+            pbar.set_postfix(scanned=f"{scanned:,}", found=found)
+            pbar.update(1)
+    else:
         def progress(scanned, found):
             if scanned % report_every == 0:
                 print(f"\rScanned {scanned:,} dirs, found {found}", end="", flush=True)
     
-    matches = []
-    count = 0
-    skip_list = [Path(p).resolve() for p in (skip_paths or [])]
-    
     try:
         # NOTE: we never touch files - stats on terabytes would kill us
-        for dirpath, dirnames, _ in os.walk(root, onerror=lambda e: None, followlinks=False):
+        for dirpath, dirnames, _ in os.walk(root_path, onerror=lambda e: None, followlinks=False):
             count += 1
             current_path = Path(dirpath)
             
-            # check depth limit - allow exactly max_depth levels beneath root
-            if max_depth is not None and len(current_path.relative_to(root).parts) > max_depth:
+            # check depth limit - max_depth levels beneath root (root = depth 0)
+            if max_depth is not None and len(current_path.relative_to(root_path).parts) > max_depth:
                 dirnames.clear()
                 continue
                 
@@ -84,7 +87,7 @@ def find_matching_dirs(root, patterns: List[str], report_every=1000, use_tqdm=Fa
     except KeyboardInterrupt:
         print(f"\nStopped by user. Scanned {count:,} dirs so far.")
     finally:
-        if pbar:
+        if pbar is not None:  # safe: no __bool__ call
             pbar.close()
         print(f"\nDone. Scanned {count:,} directories, found {len(matches)} matches.")
     
