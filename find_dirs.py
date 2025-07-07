@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""
+Quick directory name scanner - finds folders containing specific substrings.
+Faster than find/grep for large filesystems since it skips files entirely.
+"""
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+from typing import List
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    """Check if path is under root without string operations."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def find_matching_dirs(root, patterns: List[str], report_every=1000, use_tqdm=False, max_depth=None, skip_paths=None):
+    """
+    Walk directory tree and find folders whose names contain any of the patterns.
+    
+    Args:
+        root: Starting directory 
+        patterns: List of substrings to search for (case-insensitive)
+        report_every: Progress update frequency
+        use_tqdm: Use progress bar if available
+        max_depth: Stop after this depth (root = depth 0)
+        skip_paths: Paths to completely avoid (optional)
+    
+    Returns:
+        List of matching directory paths
+    """
+    # compile regex once for speed - avoids repeated string operations
+    regex = re.compile("|".join(re.escape(p) for p in patterns), re.IGNORECASE)
+    
+    # setup progress reporting
+    pbar = None
+    if use_tqdm:
+        try:
+            from tqdm import tqdm
+            pbar = tqdm(unit="dirs")
+            def progress(scanned, found):
+                pbar.set_postfix(scanned=f"{scanned:,}", found=found)
+                pbar.update(1)
+        except ImportError:
+            use_tqdm = False
+    
+    if not use_tqdm:
+        def progress(scanned, found):
+            if scanned % report_every == 0:
+                print(f"\rScanned {scanned:,} dirs, found {found}", end="", flush=True)
+    
+    matches = []
+    count = 0
+    skip_list = [Path(p).resolve() for p in (skip_paths or [])]
+    
+    try:
+        # NOTE: we never touch files - stats on terabytes would kill us
+        for dirpath, dirnames, _ in os.walk(root, onerror=lambda e: None, followlinks=False):
+            count += 1
+            current_path = Path(dirpath)
+            
+            # check depth limit - allow exactly max_depth levels beneath root
+            if max_depth is not None and len(current_path.relative_to(root).parts) > max_depth:
+                dirnames.clear()
+                continue
+                
+            # skip unwanted paths using proper path comparison
+            if any(_is_under(current_path, skip) for skip in skip_list):
+                dirnames.clear()
+                continue
+            
+            # test directory name against patterns
+            if regex.search(current_path.name):
+                matches.append(dirpath)
+            
+            progress(count, len(matches))
+            
+    except KeyboardInterrupt:
+        print(f"\nStopped by user. Scanned {count:,} dirs so far.")
+    finally:
+        if pbar:
+            pbar.close()
+        print(f"\nDone. Scanned {count:,} directories, found {len(matches)} matches.")
+    
+    return matches
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Find directories by name patterns")
+    parser.add_argument("root", help="Starting directory")
+    parser.add_argument("patterns", nargs="+", help="Substrings to search for")
+    parser.add_argument("--report-every", type=int, default=1000, help="Progress update frequency")
+    parser.add_argument("--tqdm", action="store_true", help="Use tqdm progress bar")
+    parser.add_argument("--max-depth", type=int, help="Maximum depth to search")
+    parser.add_argument("--skip", nargs="*", help="Paths to skip (e.g. /proc /sys)")
+    
+    args = parser.parse_args()
+    
+    results = find_matching_dirs(
+        args.root,
+        args.patterns,
+        report_every=args.report_every,
+        use_tqdm=args.tqdm,
+        max_depth=args.max_depth,
+        skip_paths=args.skip
+    )
+    
+    # print results one per line
+    for path in results:
+        print(path)
+
+
+if __name__ == "__main__":
+    main()
