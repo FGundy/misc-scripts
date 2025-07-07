@@ -55,8 +55,9 @@ def find_matching_dirs(root, patterns: List[str], report_every=1000, use_tqdm=Fa
     if use_tqdm and HAS_TQDM:
         pbar = tqdm(unit="dirs")
         def progress(scanned, found):
-            pbar.set_postfix(scanned=f"{scanned:,}", found=found)
-            pbar.update(1)
+            if scanned % report_every == 0:
+                pbar.set_postfix(scanned=f"{scanned:,}", found=found)
+                pbar.update(report_every)  # batch update instead of every single dir
     else:
         def progress(scanned, found):
             if scanned % report_every == 0:
